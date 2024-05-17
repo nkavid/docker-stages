@@ -1,0 +1,15 @@
+[submodule "thirdparty/Kitware_CMake"]
+	path = thirdparty/Kitware_CMake
+	url = https://github.com/Kitware/CMake.git
+[submodule "thirdparty/gnu_gcc"]
+	path = thirdparty/gnu_gcc
+	url = git://gcc.gnu.org/git/gcc.git
+	branch = releases/gcc-12
+[submodule "thirdparty/llvm_llvm-project"]
+	path = thirdparty/llvm_llvm-project
+	url = git@github.com:llvm/llvm-project.git
+	branch = release/17.x
+[submodule "thirdparty/include-what-you-use_include-what-you-use"]
+	path = thirdparty/include-what-you-use_include-what-you-use
+	url = git@github.com:include-what-you-use/include-what-you-use.git
+	branch = clang_17
