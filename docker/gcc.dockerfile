@@ -96,7 +96,7 @@ RUN test "$("/opt/nkavid/gcc/gcc_${GCC_VERSION}/bin/gcc" -dumpfullversion)" = "$
 
 # hadolint ignore=SC2016
 RUN set -o errexit -o nounset -o pipefail \
-&& find "/opt/nkavid/gcc/gcc_${GCC_VERSION}" -name '*.so*' -type f -print0 \
+&& find "/opt/nkavid/gcc/gcc_${GCC_VERSION}" -path "/opt/nkavid/gcc/gcc_${GCC_VERSION}/sysroot" -prune -o -name '*.so*' -type f -print0 \
 | while IFS= read -r -d '' shared_object; do \
 if file --brief "${shared_object}" | grep --quiet '^ELF'; then \
 patchelf --set-rpath '$ORIGIN' "${shared_object}"; \

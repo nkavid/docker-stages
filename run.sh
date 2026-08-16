@@ -36,9 +36,25 @@ if [[ $1 == "stages" ]]; then
 	fi
 
 	if [[ $2 == "check" ]]; then
-		docker run --rm \
---mount "type=image,source=nkavid/gcc:12.5.0,target=/opt,readonly,image-subpath=opt" \
-ubuntu:22.04 "/opt/nkavid/gcc/gcc_12.5.0/bin/gcc" --version \
-|| { error "gcc 12.5.0 toolchain not usable from mounted artifact"; exit 1; }
+		mkdir --parents build
+
+		BASE_IMAGE="debian:13"
+
+		for TOOLCHAIN in "gcc 12.5.0 g++" "gcc 13.4.0 g++" "llvm 22.1.8 clang++"; do
+			read -r KIND VERSION COMPILER <<<"${TOOLCHAIN}"
+			IMAGE_TAG="nkavid/${KIND}:${VERSION}"
+			PREFIX_PATH="/mnt/opt/nkavid/${KIND}/${KIND}_${VERSION}"
+
+			docker run --rm \
+--mount "type=image,source=${IMAGE_TAG},target=/mnt,readonly" \
+"${BASE_IMAGE}" "${PREFIX_PATH}/bin/${COMPILER}" --version \
+|| { error "${KIND} ${VERSION} toolchain not usable"; exit 1; }
+
+			docker run --rm \
+--mount "type=image,source=${IMAGE_TAG},target=/mnt,readonly" \
+-v "${PWD}/dummy:/dummy:ro" -v "${PWD}/build:/build" \
+"${BASE_IMAGE}" "${PREFIX_PATH}/bin/${COMPILER}" /dummy/hello.cpp -o "/build/hello_${KIND}_${VERSION}" \
+|| { error "${KIND} ${VERSION} cannot compile dummy/hello.cpp"; exit 1; }
+		done
 	fi
 fi

@@ -219,7 +219,7 @@ RUN set -o errexit -o nounset \
 if file --brief "${shared_object}" | grep --quiet '^ELF'; then \
 patchelf --set-rpath '$ORIGIN' "${shared_object}"; \
 fi \
-done < <(find "/opt/nkavid/llvm/llvm_${LLVM_VERSION}" -name '*.so*' -type f -print0)
+done < <(find "/opt/nkavid/llvm/llvm_${LLVM_VERSION}" -path "/opt/nkavid/llvm/llvm_${LLVM_VERSION}/sysroot" -prune -o -name '*.so*' -type f -print0)
 
 RUN set -o errexit -o nounset \
 && LLVM_MAJOR="${LLVM_VERSION%%.*}" \
