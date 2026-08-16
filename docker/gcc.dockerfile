@@ -4,7 +4,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 RUN apt-get update && apt-get install --no-install-recommends -y \
 build-essential=12.9ubuntu3 git=1:2.34.1-1ubuntu1.17 ca-certificates=20260601~22.04.1 curl=7.81.0-1ubuntu1.25 \
-bison=2:3.8.2+dfsg-1build1 gawk=1:5.1.0-1ubuntu0.1 gettext=0.21-4ubuntu4 m4=1.4.18-5ubuntu2 flex=2.6.4-8build2 \
+bison=2:3.8.2+dfsg-1build1 gawk=1:5.1.0-1ubuntu0.2 gettext=0.21-4ubuntu4 m4=1.4.18-5ubuntu2 flex=2.6.4-8build2 \
 texinfo=6.8-4build1 file=1:5.41-3ubuntu0.1 xz-utils=5.2.5-2ubuntu1.1 pkg-config=0.29.2-1ubuntu3 python3=3.10.6-1~22.04.1 \
 zlib1g-dev=1:1.2.11.dfsg-2ubuntu9.2 patchelf=0.14.3-1 rsync=3.2.7-0ubuntu0.22.04.7 \
 && rm -rf /var/lib/apt/lists/*
