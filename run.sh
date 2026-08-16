@@ -146,20 +146,26 @@ fi
 
 if [[ $1 == "stages" ]]; then
 	if [[ $2 == "image" ]]; then
-		SYSROOT_IMAGE="nkavid/dockerfile-sysroot:0.0.1"
+		SYSROOT_IMAGE="nkavid/sysroot:0.0.1"
 		docker build --tag "${SYSROOT_IMAGE}" --file "docker/sysroot.dockerfile" . \
 || { error "docker buildx history logs"; exit 1; }
 
-		GCC_IMAGE="nkavid/dockerfile-gcc:0.0.1"
-		docker build --tag "${GCC_IMAGE}" --file "docker/gcc.dockerfile" . \
+		for GCC_VERSION in "12.5.0" "13.4.0"; do
+			docker build --build-arg "GCC_VERSION=${GCC_VERSION}" \
+--tag "nkavid/gcc:${GCC_VERSION}" --file "docker/gcc.dockerfile" . \
 || { error "docker buildx history logs"; exit 1; }
+		done
 
-		GCC13_IMAGE="nkavid/dockerfile-gcc13:0.0.1"
-		docker build --tag "${GCC13_IMAGE}" --file "docker/gcc13.dockerfile" . \
+		LLVM_VERSION="22.1.8"
+		docker build --build-arg "LLVM_VERSION=${LLVM_VERSION}" \
+--tag "nkavid/llvm:${LLVM_VERSION}" --file "docker/llvm.dockerfile" . \
 || { error "docker buildx history logs"; exit 1; }
+	fi
 
-		LLVM_IMAGE="nkavid/dockerfile-llvm:0.0.1"
-		docker build --tag "${LLVM_IMAGE}" --file "docker/llvm.dockerfile" . \
-|| { error "docker buildx history logs"; exit 1; }
+	if [[ $2 == "check" ]]; then
+		docker run --rm \
+--mount "type=image,source=nkavid/gcc:12.5.0,target=/opt,readonly,image-subpath=opt" \
+ubuntu:22.04 "/opt/nkavid/gcc/gcc_12.5.0/bin/gcc" --version \
+|| { error "gcc 12.5.0 toolchain not usable from mounted artifact"; exit 1; }
 	fi
 fi

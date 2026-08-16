@@ -9,11 +9,15 @@ texinfo=6.8-4build1 file=1:5.41-3ubuntu0.1 xz-utils=5.2.5-2ubuntu1.1 pkg-config=
 zlib1g-dev=1:1.2.11.dfsg-2ubuntu9.2 patchelf=0.14.3-1 rsync=3.2.7-0ubuntu0.22.04.7 \
 && rm -rf /var/lib/apt/lists/*
 
-FROM nkavid/dockerfile-sysroot:0.0.1 AS sysroot
+FROM nkavid/sysroot:0.0.1 AS sysroot
 
 FROM base AS binutils
 
+ARG GCC_VERSION
+
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+RUN test -n "${GCC_VERSION}"
 
 WORKDIR /build/binutils
 
@@ -23,8 +27,8 @@ RUN curl --fail --location "https://ftp.gnu.org/gnu/binutils/binutils-2.44.tar.x
 WORKDIR /build/binutils/build
 
 RUN ../configure \
---prefix="/opt/nkavid/gcc/gcc_12.5" \
---with-sysroot="/opt/nkavid/gcc/gcc_12.5/sysroot" \
+--prefix="/opt/nkavid/gcc/gcc_${GCC_VERSION}" \
+--with-sysroot="/opt/nkavid/gcc/gcc_${GCC_VERSION}/sysroot" \
 --disable-nls \
 --disable-werror \
 --disable-gprofng \
@@ -37,14 +41,18 @@ RUN make install-strip
 
 FROM base AS gcc
 
+ARG GCC_VERSION
+
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 COPY --from=sysroot /sysroot /sysroot
-COPY --from=binutils "/opt/nkavid/gcc/gcc_12.5" "/opt/nkavid/gcc/gcc_12.5"
+COPY --from=binutils "/opt/nkavid/gcc/gcc_${GCC_VERSION}" "/opt/nkavid/gcc/gcc_${GCC_VERSION}"
 
 WORKDIR /build/gcc
 
-RUN git clone --branch "releases/gcc-12.5.0" --depth 1 "git://gcc.gnu.org/git/gcc.git" .
+RUN git clone --branch "releases/gcc-${GCC_VERSION}" --depth 1 "https://github.com/gcc-mirror/gcc.git" . \
+&& git tag --points-at HEAD | grep --line-regexp --quiet "releases/gcc-${GCC_VERSION}" \
+&& test "$(cat gcc/BASE-VER)" = "${GCC_VERSION}"
 
 RUN ./contrib/download_prerequisites
 
@@ -60,7 +68,7 @@ RUN ../configure \
 --disable-libquadmath \
 --disable-libitm \
 --with-build-config=bootstrap-lto-lean \
---prefix="/opt/nkavid/gcc/gcc_12.5" \
+--prefix="/opt/nkavid/gcc/gcc_${GCC_VERSION}" \
 --with-sysroot=/RELOCATABLE_SYSROOT \
 --with-build-sysroot=/sysroot \
 || (cat config.log && exit 1)
@@ -68,38 +76,35 @@ RUN ../configure \
 # hadolint ignore=SC2016
 RUN grep -rl '/RELOCATABLE_SYSROOT' . | xargs sed -i 's|/RELOCATABLE_SYSROOT|$(exec_prefix)/sysroot|g'
 
-RUN mkdir -p "/opt/nkavid/gcc/gcc_12.5/sysroot"
+RUN mkdir -p "/opt/nkavid/gcc/gcc_${GCC_VERSION}/sysroot"
 
-RUN cp -a /sysroot/. "/opt/nkavid/gcc/gcc_12.5/sysroot/"
+RUN cp -a /sysroot/. "/opt/nkavid/gcc/gcc_${GCC_VERSION}/sysroot/"
 
 RUN make -j"$(( $(nproc) - 1 ))" all-gcc \
 || (find . -name config.log -print -exec cat {} \; && exit 1)
 
 RUN make install-gcc
 
-ENV PATH="/opt/nkavid/gcc/gcc_12.5/bin:${PATH}"
+ENV PATH="/opt/nkavid/gcc/gcc_${GCC_VERSION}/bin:${PATH}"
 
 RUN make -j"$(( $(nproc) - 1 ))" profiledbootstrap \
 || (find . -name config.log -print -exec cat {} \; && exit 1)
 
 RUN make install-strip
 
+RUN test "$("/opt/nkavid/gcc/gcc_${GCC_VERSION}/bin/gcc" -dumpfullversion)" = "${GCC_VERSION}"
+
 # hadolint ignore=SC2016
-RUN set -o errexit -o nounset \
-&& while IFS= read -r -d '' shared_object; do \
+RUN set -o errexit -o nounset -o pipefail \
+&& find "/opt/nkavid/gcc/gcc_${GCC_VERSION}" -name '*.so*' -type f -print0 \
+| while IFS= read -r -d '' shared_object; do \
 if file --brief "${shared_object}" | grep --quiet '^ELF'; then \
 patchelf --set-rpath '$ORIGIN' "${shared_object}"; \
 fi \
-done < <(find "/opt/nkavid/gcc/gcc_12.5" -name '*.so*' -type f -print0)
+done
 
 FROM scratch AS export
 
-COPY --from=gcc "/opt/nkavid/gcc/gcc_12.5" "/opt/nkavid/gcc/gcc_12.5"
+ARG GCC_VERSION
 
-FROM ubuntu:22.04
-
-COPY --from=gcc "/opt/nkavid/gcc/gcc_12.5" "/opt/nkavid/gcc/gcc_12.5"
-RUN ln -s /opt/nkavid/gcc/gcc_12.5/bin/ld /usr/bin/ld
-ENV PATH="/opt/nkavid/gcc/gcc_12.5/bin:${PATH}"
-
-WORKDIR /workspace
+COPY --from=gcc "/opt/nkavid/gcc/gcc_${GCC_VERSION}" "/opt/nkavid/gcc/gcc_${GCC_VERSION}"

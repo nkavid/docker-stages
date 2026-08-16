@@ -10,11 +10,18 @@ patchelf=0.14.3-1 file=1:5.41-3ubuntu0.1 \
 
 FROM base AS source
 
+ARG LLVM_VERSION
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+RUN test -n "${LLVM_VERSION}"
+
 WORKDIR /src/llvm-project
 
-RUN git clone --branch "llvmorg-22.1.8" --depth 1 "https://github.com/llvm/llvm-project.git" .
+RUN git clone --branch "llvmorg-${LLVM_VERSION}" --depth 1 "https://github.com/llvm/llvm-project.git" . \
+&& git tag --points-at HEAD | grep --line-regexp --quiet "llvmorg-${LLVM_VERSION}"
 
-FROM nkavid/dockerfile-sysroot:0.0.1 AS sysroot
+FROM nkavid/sysroot:0.0.1 AS sysroot
 
 FROM base AS stage1
 
@@ -32,11 +39,14 @@ RUN ninja -C /build/stage1 install
 
 FROM base AS runtimes
 
+ARG LLVM_VERSION
+
 COPY --from=source /src/llvm-project /src/llvm-project
 COPY --from=stage1 /opt/stage1 /opt/stage1
 COPY --from=sysroot /sysroot /sysroot
 
-RUN cmake -GNinja -S /src/llvm-project/runtimes -B /build/compiler-rt \
+RUN LLVM_MAJOR="${LLVM_VERSION%%.*}" \
+&& cmake -GNinja -S /src/llvm-project/runtimes -B /build/compiler-rt \
 -DCMAKE_BUILD_TYPE=Release \
 -DCMAKE_C_COMPILER=/opt/stage1/bin/clang \
 -DCMAKE_CXX_COMPILER=/opt/stage1/bin/clang++ \
@@ -53,12 +63,13 @@ RUN cmake -GNinja -S /src/llvm-project/runtimes -B /build/compiler-rt \
 -DCOMPILER_RT_BUILD_MEMPROF=OFF \
 -DCOMPILER_RT_BUILD_ORC=OFF \
 -DCOMPILER_RT_BUILD_PROFILE=ON \
--DCOMPILER_RT_INSTALL_PATH=/opt/stage1/lib/clang/22 \
+"-DCOMPILER_RT_INSTALL_PATH=/opt/stage1/lib/clang/${LLVM_MAJOR}" \
 -DCMAKE_INSTALL_PREFIX=/opt/stage1
 
-RUN ninja -C /build/compiler-rt install \
-&& mkdir -p /opt/nkavid/llvm/llvm_22.1/lib/clang/22/lib \
-&& cp -a /opt/stage1/lib/clang/22/lib/. /opt/nkavid/llvm/llvm_22.1/lib/clang/22/lib/
+RUN LLVM_MAJOR="${LLVM_VERSION%%.*}" \
+&& ninja -C /build/compiler-rt install \
+&& mkdir -p "/opt/nkavid/llvm/llvm_${LLVM_VERSION}/lib/clang/${LLVM_MAJOR}/lib" \
+&& cp -a "/opt/stage1/lib/clang/${LLVM_MAJOR}/lib/." "/opt/nkavid/llvm/llvm_${LLVM_VERSION}/lib/clang/${LLVM_MAJOR}/lib/"
 
 RUN cmake -GNinja -S /src/llvm-project/runtimes -B /build/runtimes \
 -DCMAKE_BUILD_TYPE=Release \
@@ -78,7 +89,7 @@ RUN cmake -GNinja -S /src/llvm-project/runtimes -B /build/runtimes \
 -DLIBCXX_HAS_ATOMIC_LIB=OFF \
 -DLIBCXXABI_USE_COMPILER_RT=ON \
 -DLIBCXXABI_USE_LLVM_UNWINDER=ON \
--DCMAKE_INSTALL_PREFIX=/opt/nkavid/llvm/llvm_22.1
+-DCMAKE_INSTALL_PREFIX=/opt/nkavid/llvm/llvm_${LLVM_VERSION}
 
 RUN ninja -C /build/runtimes install
 
@@ -86,7 +97,7 @@ FROM base AS instrumented
 
 COPY --from=source /src/llvm-project /src/llvm-project
 COPY --from=stage1 /opt/stage1 /opt/stage1
-COPY --from=runtimes /opt/stage1/lib/clang/22/lib /opt/stage1/lib/clang/22/lib
+COPY --from=runtimes /opt/stage1/lib/clang /opt/stage1/lib/clang
 
 RUN cmake -GNinja -S /src/llvm-project/llvm -B /build/instrumented \
 -DCMAKE_BUILD_TYPE=Release \
@@ -117,12 +128,14 @@ RUN mkdir -p /profiles \
 
 FROM base AS llvm
 
+ARG LLVM_VERSION
+
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 COPY --from=source /src/llvm-project /src/llvm-project
 COPY --from=stage1 /opt/stage1 /opt/stage1
-COPY --from=runtimes /opt/nkavid/llvm/llvm_22.1 /opt/nkavid/llvm/llvm_22.1
-COPY --from=sysroot /sysroot /opt/nkavid/llvm/llvm_22.1/sysroot
+COPY --from=runtimes /opt/nkavid/llvm/llvm_${LLVM_VERSION} /opt/nkavid/llvm/llvm_${LLVM_VERSION}
+COPY --from=sysroot /sysroot /opt/nkavid/llvm/llvm_${LLVM_VERSION}/sysroot
 COPY --from=instrumented /profiles/clang.profdata /profiles/clang.profdata
 
 RUN cmake -GNinja -S /src/llvm-project/llvm -B /build/final \
@@ -146,22 +159,24 @@ RUN cmake -GNinja -S /src/llvm-project/llvm -B /build/final \
 -DCLANG_DEFAULT_UNWINDLIB=libunwind \
 -DLLVM_PARALLEL_COMPILE_JOBS=8 \
 -DLLVM_PARALLEL_LINK_JOBS=2 \
--DCMAKE_INSTALL_PREFIX=/opt/nkavid/llvm/llvm_22.1
+-DCMAKE_INSTALL_PREFIX=/opt/nkavid/llvm/llvm_${LLVM_VERSION}
 
 RUN ninja -C /build/final install
 
 RUN printf -- '--sysroot=<CFGDIR>/../sysroot\n' \
-| tee /opt/nkavid/llvm/llvm_22.1/bin/clang.cfg \
->/opt/nkavid/llvm/llvm_22.1/bin/clang++.cfg
+| tee /opt/nkavid/llvm/llvm_${LLVM_VERSION}/bin/clang.cfg \
+>/opt/nkavid/llvm/llvm_${LLVM_VERSION}/bin/clang++.cfg
 
-RUN mkdir -p /profiles/bolt \
-&& /opt/stage1/bin/llvm-bolt /opt/nkavid/llvm/llvm_22.1/bin/clang-22 \
+RUN LLVM_MAJOR="${LLVM_VERSION%%.*}" \
+&& mkdir -p /profiles/bolt \
+&& /opt/stage1/bin/llvm-bolt "/opt/nkavid/llvm/llvm_${LLVM_VERSION}/bin/clang-${LLVM_MAJOR}" \
 -instrument \
--o /opt/nkavid/llvm/llvm_22.1/bin/clang-22-instrumented \
+-o "/opt/nkavid/llvm/llvm_${LLVM_VERSION}/bin/clang-${LLVM_MAJOR}-instrumented" \
 --instrumentation-file=/profiles/bolt/prof.fdata \
 --instrumentation-file-append-pid
 
-RUN printf '%s\n' \
+RUN LLVM_MAJOR="${LLVM_VERSION%%.*}" \
+&& printf '%s\n' \
 '#include <algorithm>' \
 '#include <map>' \
 '#include <memory>' \
@@ -179,14 +194,15 @@ RUN printf '%s\n' \
 '  return static_cast<int>(std::accumulate(values.begin(), values.end(), 0L) % 128);' \
 '}' > /tmp/train.cpp \
 && for opt_level in O0 O1 O2 O3; do \
-/opt/nkavid/llvm/llvm_22.1/bin/clang-22-instrumented \
---config=/opt/nkavid/llvm/llvm_22.1/bin/clang++.cfg \
+"/opt/nkavid/llvm/llvm_${LLVM_VERSION}/bin/clang-${LLVM_MAJOR}-instrumented" \
+--config="/opt/nkavid/llvm/llvm_${LLVM_VERSION}/bin/clang++.cfg" \
 --driver-mode=g++ "-${opt_level}" -std=c++20 -c /tmp/train.cpp -o /tmp/train.o; \
 done \
 && /opt/stage1/bin/merge-fdata /profiles/bolt/prof.fdata* > /profiles/clang-bolt.fdata
 
-RUN /opt/stage1/bin/llvm-bolt /opt/nkavid/llvm/llvm_22.1/bin/clang-22 \
--o /opt/nkavid/llvm/llvm_22.1/bin/clang-22-bolt \
+RUN LLVM_MAJOR="${LLVM_VERSION%%.*}" \
+&& /opt/stage1/bin/llvm-bolt "/opt/nkavid/llvm/llvm_${LLVM_VERSION}/bin/clang-${LLVM_MAJOR}" \
+-o "/opt/nkavid/llvm/llvm_${LLVM_VERSION}/bin/clang-${LLVM_MAJOR}-bolt" \
 -data=/profiles/clang-bolt.fdata \
 -reorder-blocks=ext-tsp \
 -reorder-functions=cdsort \
@@ -194,8 +210,8 @@ RUN /opt/stage1/bin/llvm-bolt /opt/nkavid/llvm/llvm_22.1/bin/clang-22 \
 -split-all-cold \
 -split-eh \
 -dyno-stats \
-&& mv /opt/nkavid/llvm/llvm_22.1/bin/clang-22-bolt /opt/nkavid/llvm/llvm_22.1/bin/clang-22 \
-&& rm /opt/nkavid/llvm/llvm_22.1/bin/clang-22-instrumented
+&& mv "/opt/nkavid/llvm/llvm_${LLVM_VERSION}/bin/clang-${LLVM_MAJOR}-bolt" "/opt/nkavid/llvm/llvm_${LLVM_VERSION}/bin/clang-${LLVM_MAJOR}" \
+&& rm "/opt/nkavid/llvm/llvm_${LLVM_VERSION}/bin/clang-${LLVM_MAJOR}-instrumented"
 
 # hadolint ignore=SC2016
 RUN set -o errexit -o nounset \
@@ -203,22 +219,18 @@ RUN set -o errexit -o nounset \
 if file --brief "${shared_object}" | grep --quiet '^ELF'; then \
 patchelf --set-rpath '$ORIGIN' "${shared_object}"; \
 fi \
-done < <(find "/opt/nkavid/llvm/llvm_22.1" -name '*.so*' -type f -print0)
+done < <(find "/opt/nkavid/llvm/llvm_${LLVM_VERSION}" -name '*.so*' -type f -print0)
 
 RUN set -o errexit -o nounset \
+&& LLVM_MAJOR="${LLVM_VERSION%%.*}" \
 && while IFS= read -r -d '' binary; do \
-if [[ "$(basename "${binary}")" != "clang-22" ]] && file --brief "${binary}" | grep --quiet '^ELF'; then \
+if [[ "$(basename "${binary}")" != "clang-${LLVM_MAJOR}" ]] && file --brief "${binary}" | grep --quiet '^ELF'; then \
 /opt/stage1/bin/llvm-strip "${binary}"; \
 fi \
-done < <(find "/opt/nkavid/llvm/llvm_22.1/bin" -type f -print0)
+done < <(find "/opt/nkavid/llvm/llvm_${LLVM_VERSION}/bin" -type f -print0)
 
 FROM scratch AS export
 
-COPY --from=llvm "/opt/nkavid/llvm/llvm_22.1" "/opt/nkavid/llvm/llvm_22.1"
+ARG LLVM_VERSION
 
-FROM ubuntu:22.04
-
-COPY --from=llvm "/opt/nkavid/llvm/llvm_22.1" "/opt/nkavid/llvm/llvm_22.1"
-ENV PATH="/opt/nkavid/llvm/llvm_22.1/bin:${PATH}"
-
-WORKDIR /workspace
+COPY --from=llvm "/opt/nkavid/llvm/llvm_${LLVM_VERSION}" "/opt/nkavid/llvm/llvm_${LLVM_VERSION}"

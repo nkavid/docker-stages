@@ -46,6 +46,6 @@ RUN make --jobs $(( $(nproc) + 1 )) \
 
 RUN make DESTDIR=/sysroot install
 
-FROM scratch
+FROM scratch AS sysroot
 
 COPY --from=glibc /sysroot /sysroot
