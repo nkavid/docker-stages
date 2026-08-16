@@ -1,5 +1,14 @@
 #!/bin/bash
 
+BASENAME="$(basename "$0")"
+RED="\x1B[31m"
+RESET="\x1B[0m"
+
+function error()
+{
+	echo -e "${RED}${BASENAME}::[ERROR]:${RESET} $1"
+}
+
 if [[ $1 == "lint" ]]; then
 	set -x
 	for dockerfile in "Dockerfile" docker/*.dockerfile; do
@@ -139,18 +148,18 @@ if [[ $1 == "stages" ]]; then
 	if [[ $2 == "image" ]]; then
 		SYSROOT_IMAGE="nkavid/dockerfile-sysroot:0.0.1"
 		docker build --tag "${SYSROOT_IMAGE}" --file "docker/sysroot.dockerfile" . \
-|| echo "docker buildx history logs"
+|| { error "docker buildx history logs"; exit 1; }
 
 		GCC_IMAGE="nkavid/dockerfile-gcc:0.0.1"
 		docker build --tag "${GCC_IMAGE}" --file "docker/gcc.dockerfile" . \
-|| echo "docker buildx history logs"
+|| { error "docker buildx history logs"; exit 1; }
 
 		GCC13_IMAGE="nkavid/dockerfile-gcc13:0.0.1"
 		docker build --tag "${GCC13_IMAGE}" --file "docker/gcc13.dockerfile" . \
-|| echo "docker buildx history logs"
+|| { error "docker buildx history logs"; exit 1; }
 
 		LLVM_IMAGE="nkavid/dockerfile-llvm:0.0.1"
 		docker build --tag "${LLVM_IMAGE}" --file "docker/llvm.dockerfile" . \
-|| echo "docker buildx history logs"
+|| { error "docker buildx history logs"; exit 1; }
 	fi
 fi
