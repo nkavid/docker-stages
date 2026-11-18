@@ -1,34 +1,46 @@
-FROM ubuntu:22.04 AS base
+ARG KERNEL_VERSION=5.15
+ARG GLIBC_VERSION=2.35
+ARG TARGET_CPU=x86_64
+ARG TARGET_OS=linux
+ARG KERNEL_ARCH=x86_64
+ARG SYSROOT_JSON=usr/share/nkavid/sysroot.json
+
+FROM nkavid/shared_base_ubuntu_22.04 AS base
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-RUN apt-get update && apt-get install --no-install-recommends -y \
-build-essential=12.9ubuntu3 ca-certificates=20260601~22.04.1 curl=7.81.0-1ubuntu1.25 \
-bison=2:3.8.2+dfsg-1build1 gawk=1:5.1.0-1ubuntu0.2 gettext=0.21-4ubuntu4 m4=1.4.18-5ubuntu2 flex=2.6.4-8build2 \
-texinfo=6.8-4build1 file=1:5.41-3ubuntu0.1 xz-utils=5.2.5-2ubuntu1.1 pkg-config=0.29.2-1ubuntu3 python3=3.10.6-1~22.04.1 \
-rsync=3.2.7-0ubuntu0.22.04.7 \
-&& rm -rf /var/lib/apt/lists/*
-
 FROM base AS kernel_headers
+
+ARG KERNEL_VERSION
+ARG KERNEL_ARCH
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 WORKDIR /build/linux
 
-RUN curl --fail --location "https://github.com/torvalds/linux/archive/refs/tags/v5.15.tar.gz" \
+RUN curl --fail --location "https://github.com/torvalds/linux/archive/refs/tags/v${KERNEL_VERSION}.tar.gz" \
 | tar --gzip --extract --strip-components=1 --file -
 
-RUN make headers_install ARCH=x86_64 INSTALL_HDR_PATH=/sysroot/usr
+RUN make headers_install ARCH="${KERNEL_ARCH}" INSTALL_HDR_PATH=/sysroot/usr
 
 FROM base AS glibc
 
+ARG GLIBC_VERSION
+ARG KERNEL_VERSION
+ARG TARGET_CPU
+ARG TARGET_OS
+ARG SYSROOT_JSON
+
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+RUN test "$(uname -m)" = "${TARGET_CPU}" \
+&& test "$(uname -s | tr '[:upper:]' '[:lower:]')" = "${TARGET_OS}"
 
 COPY --from=kernel_headers /sysroot /sysroot
 
 WORKDIR /build/glibc
 
-RUN curl --fail --location "https://ftp.gnu.org/gnu/glibc/glibc-2.35.tar.xz" \
+RUN curl --fail --location "https://ftp.gnu.org/gnu/glibc/glibc-${GLIBC_VERSION}.tar.xz" \
 | tar --xz --extract --strip-components=1 --file -
 
 WORKDIR /build/glibc/build
@@ -36,15 +48,27 @@ WORKDIR /build/glibc/build
 RUN ../configure \
 --prefix=/usr \
 --with-headers=/sysroot/usr/include \
---enable-kernel=5.15 \
+--enable-kernel=${KERNEL_VERSION} \
 --disable-werror \
 libc_cv_slibdir=/lib \
 || (cat config.log && exit 1)
 
-RUN make --jobs $(( $(nproc) + 1 )) \
+RUN make --jobs $(( $(nproc) - 1 )) \
 || (find . -name config.log -print -exec cat {} \; && exit 1)
 
 RUN make DESTDIR=/sysroot install
+
+RUN grep --recursive --files-with-matches --binary-files=without-match '^GROUP' /sysroot/usr/lib \
+| xargs sed --in-place --regexp-extended '/^GROUP/s@([( ])/@\1=/@g' \
+&& ! grep --recursive --binary-files=without-match --extended-regexp '^GROUP.*[( ]/' /sysroot/usr/lib
+
+RUN mkdir -p "$(dirname "/sysroot/${SYSROOT_JSON}")" \
+&& jq --null-input \
+--arg cpu "${TARGET_CPU}" \
+--arg os "${TARGET_OS}" \
+--arg libc "glibc-${GLIBC_VERSION}" \
+'{abi_libc_version: $libc, host_cpu: $cpu, host_os: $os, host_system_name: "\($os)_\($cpu)", target_cpu: $cpu, target_libc: $libc, target_os: $os}' \
+>"/sysroot/${SYSROOT_JSON}"
 
 FROM scratch AS sysroot
 

@@ -1,0 +1,7 @@
+common --repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=1
+
+build:gcc_13.4.0 --extra_toolchains=//toolchain/gcc:13.4.0
+
+build:llvm_22.1.8 --extra_toolchains=//toolchain/llvm:22.1.8
+
+try-import %workspace%/.bazelrc.user

@@ -1,0 +1,21 @@
+module(name = "hello_toolchain")
+
+bazel_dep(name = "platforms", version = "1.0.0")
+
+local_tarball = use_repo_rule("//toolchain:local_tarball.bzl", "local_tarball")
+
+local_tarball(
+    name = "gcc_13.4.0",
+    archive = "gcc_13.4.0.tar",
+    build_file = "//toolchain/gcc:repo.BUILD",
+    sha256 = "058227b7f27ecacf2791f8b7387c14ce5c13a1a0255927a9289cf20485d9e182",
+    strip_prefix = "opt/nkavid/gcc/gcc_13.4.0",
+)
+
+local_tarball(
+    name = "llvm_22.1.8",
+    archive = "llvm_22.1.8.tar",
+    build_file = "//toolchain/llvm:repo.BUILD",
+    sha256 = "43ec9b48a09ca9890fef9f59f1cfcc5412837d9cda43be2f8074a6409f6c08ac",
+    strip_prefix = "opt/nkavid/llvm/llvm_22.1.8",
+)

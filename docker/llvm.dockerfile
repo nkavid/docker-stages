@@ -1,12 +1,11 @@
-FROM ubuntu:22.04 AS base
+ARG LLVM_VERSION
+ARG LLVM_TRIPLE=x86_64-unknown-linux-gnu
+ARG SYSROOT_JSON=usr/share/nkavid/sysroot.json
+ARG TOOLCHAIN_JSON=share/nkavid/toolchain.json
+
+FROM nkavid/shared_base_ubuntu_22.04 AS base
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-
-RUN apt-get update && apt-get install --no-install-recommends -y \
-build-essential=12.9ubuntu3 ca-certificates=20260601~22.04.1 curl=7.81.0-1ubuntu1.25 git=1:2.34.1-1ubuntu1.17 \
-cmake=3.22.1-1ubuntu1.22.04.2 ninja-build=1.10.1-1 python3=3.10.6-1~22.04.1 zlib1g-dev=1:1.2.11.dfsg-2ubuntu9.2 \
-patchelf=0.14.3-1 file=1:5.41-3ubuntu0.1 \
-&& rm -rf /var/lib/apt/lists/*
 
 FROM base AS source
 
@@ -41,6 +40,8 @@ FROM base AS runtimes
 
 ARG LLVM_VERSION
 
+ENV LLVM_PREFIX="/opt/nkavid/llvm/llvm_${LLVM_VERSION}"
+
 COPY --from=source /src/llvm-project /src/llvm-project
 COPY --from=stage1 /opt/stage1 /opt/stage1
 COPY --from=sysroot /sysroot /sysroot
@@ -68,8 +69,8 @@ RUN LLVM_MAJOR="${LLVM_VERSION%%.*}" \
 
 RUN LLVM_MAJOR="${LLVM_VERSION%%.*}" \
 && ninja -C /build/compiler-rt install \
-&& mkdir -p "/opt/nkavid/llvm/llvm_${LLVM_VERSION}/lib/clang/${LLVM_MAJOR}/lib" \
-&& cp -a "/opt/stage1/lib/clang/${LLVM_MAJOR}/lib/." "/opt/nkavid/llvm/llvm_${LLVM_VERSION}/lib/clang/${LLVM_MAJOR}/lib/"
+&& mkdir -p "${LLVM_PREFIX}/lib/clang/${LLVM_MAJOR}/lib" \
+&& cp -a "/opt/stage1/lib/clang/${LLVM_MAJOR}/lib/." "${LLVM_PREFIX}/lib/clang/${LLVM_MAJOR}/lib/"
 
 RUN cmake -GNinja -S /src/llvm-project/runtimes -B /build/runtimes \
 -DCMAKE_BUILD_TYPE=Release \
@@ -89,7 +90,7 @@ RUN cmake -GNinja -S /src/llvm-project/runtimes -B /build/runtimes \
 -DLIBCXX_HAS_ATOMIC_LIB=OFF \
 -DLIBCXXABI_USE_COMPILER_RT=ON \
 -DLIBCXXABI_USE_LLVM_UNWINDER=ON \
--DCMAKE_INSTALL_PREFIX=/opt/nkavid/llvm/llvm_${LLVM_VERSION}
+"-DCMAKE_INSTALL_PREFIX=${LLVM_PREFIX}"
 
 RUN ninja -C /build/runtimes install
 
@@ -129,13 +130,18 @@ RUN mkdir -p /profiles \
 FROM base AS llvm
 
 ARG LLVM_VERSION
+ARG LLVM_TRIPLE
+ARG SYSROOT_JSON
+ARG TOOLCHAIN_JSON
+
+ENV LLVM_PREFIX="/opt/nkavid/llvm/llvm_${LLVM_VERSION}"
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 COPY --from=source /src/llvm-project /src/llvm-project
 COPY --from=stage1 /opt/stage1 /opt/stage1
-COPY --from=runtimes /opt/nkavid/llvm/llvm_${LLVM_VERSION} /opt/nkavid/llvm/llvm_${LLVM_VERSION}
-COPY --from=sysroot /sysroot /opt/nkavid/llvm/llvm_${LLVM_VERSION}/sysroot
+COPY --from=runtimes "${LLVM_PREFIX}" "${LLVM_PREFIX}"
+COPY --from=sysroot /sysroot "${LLVM_PREFIX}/sysroot"
 COPY --from=instrumented /profiles/clang.profdata /profiles/clang.profdata
 
 RUN cmake -GNinja -S /src/llvm-project/llvm -B /build/final \
@@ -159,19 +165,23 @@ RUN cmake -GNinja -S /src/llvm-project/llvm -B /build/final \
 -DCLANG_DEFAULT_UNWINDLIB=libunwind \
 -DLLVM_PARALLEL_COMPILE_JOBS=8 \
 -DLLVM_PARALLEL_LINK_JOBS=2 \
--DCMAKE_INSTALL_PREFIX=/opt/nkavid/llvm/llvm_${LLVM_VERSION}
+"-DCMAKE_INSTALL_PREFIX=${LLVM_PREFIX}"
 
 RUN ninja -C /build/final install
 
 RUN printf -- '--sysroot=<CFGDIR>/../sysroot\n' \
-| tee /opt/nkavid/llvm/llvm_${LLVM_VERSION}/bin/clang.cfg \
->/opt/nkavid/llvm/llvm_${LLVM_VERSION}/bin/clang++.cfg
+| tee "${LLVM_PREFIX}/bin/clang.cfg" \
+>"${LLVM_PREFIX}/bin/clang++.cfg"
+
+RUN test "$("${LLVM_PREFIX}/bin/clang" -dumpversion)" = "${LLVM_VERSION}" \
+&& test "$("${LLVM_PREFIX}/bin/clang" -print-target-triple)" = "${LLVM_TRIPLE}"
 
 RUN LLVM_MAJOR="${LLVM_VERSION%%.*}" \
 && mkdir -p /profiles/bolt \
-&& /opt/stage1/bin/llvm-bolt "/opt/nkavid/llvm/llvm_${LLVM_VERSION}/bin/clang-${LLVM_MAJOR}" \
+&& /opt/stage1/bin/llvm-bolt "${LLVM_PREFIX}/bin/clang-${LLVM_MAJOR}" \
 -instrument \
--o "/opt/nkavid/llvm/llvm_${LLVM_VERSION}/bin/clang-${LLVM_MAJOR}-instrumented" \
+--no-threads \
+-o "${LLVM_PREFIX}/bin/clang-${LLVM_MAJOR}-instrumented" \
 --instrumentation-file=/profiles/bolt/prof.fdata \
 --instrumentation-file-append-pid
 
@@ -194,24 +204,25 @@ RUN LLVM_MAJOR="${LLVM_VERSION%%.*}" \
 '  return static_cast<int>(std::accumulate(values.begin(), values.end(), 0L) % 128);' \
 '}' > /tmp/train.cpp \
 && for opt_level in O0 O1 O2 O3; do \
-"/opt/nkavid/llvm/llvm_${LLVM_VERSION}/bin/clang-${LLVM_MAJOR}-instrumented" \
---config="/opt/nkavid/llvm/llvm_${LLVM_VERSION}/bin/clang++.cfg" \
+"${LLVM_PREFIX}/bin/clang-${LLVM_MAJOR}-instrumented" \
+--config="${LLVM_PREFIX}/bin/clang++.cfg" \
 --driver-mode=g++ "-${opt_level}" -std=c++20 -c /tmp/train.cpp -o /tmp/train.o; \
 done \
 && /opt/stage1/bin/merge-fdata /profiles/bolt/prof.fdata* > /profiles/clang-bolt.fdata
 
 RUN LLVM_MAJOR="${LLVM_VERSION%%.*}" \
-&& /opt/stage1/bin/llvm-bolt "/opt/nkavid/llvm/llvm_${LLVM_VERSION}/bin/clang-${LLVM_MAJOR}" \
--o "/opt/nkavid/llvm/llvm_${LLVM_VERSION}/bin/clang-${LLVM_MAJOR}-bolt" \
+&& /opt/stage1/bin/llvm-bolt "${LLVM_PREFIX}/bin/clang-${LLVM_MAJOR}" \
+-o "${LLVM_PREFIX}/bin/clang-${LLVM_MAJOR}-bolt" \
 -data=/profiles/clang-bolt.fdata \
+--no-threads \
 -reorder-blocks=ext-tsp \
 -reorder-functions=cdsort \
 -split-functions \
 -split-all-cold \
 -split-eh \
 -dyno-stats \
-&& mv "/opt/nkavid/llvm/llvm_${LLVM_VERSION}/bin/clang-${LLVM_MAJOR}-bolt" "/opt/nkavid/llvm/llvm_${LLVM_VERSION}/bin/clang-${LLVM_MAJOR}" \
-&& rm "/opt/nkavid/llvm/llvm_${LLVM_VERSION}/bin/clang-${LLVM_MAJOR}-instrumented"
+&& mv "${LLVM_PREFIX}/bin/clang-${LLVM_MAJOR}-bolt" "${LLVM_PREFIX}/bin/clang-${LLVM_MAJOR}" \
+&& rm "${LLVM_PREFIX}/bin/clang-${LLVM_MAJOR}-instrumented"
 
 # hadolint ignore=SC2016
 RUN set -o errexit -o nounset \
@@ -219,7 +230,7 @@ RUN set -o errexit -o nounset \
 if file --brief "${shared_object}" | grep --quiet '^ELF'; then \
 patchelf --set-rpath '$ORIGIN' "${shared_object}"; \
 fi \
-done < <(find "/opt/nkavid/llvm/llvm_${LLVM_VERSION}" -path "/opt/nkavid/llvm/llvm_${LLVM_VERSION}/sysroot" -prune -o -name '*.so*' -type f -print0)
+done < <(find "${LLVM_PREFIX}" -path "${LLVM_PREFIX}/sysroot" -prune -o -name '*.so*' -type f -print0)
 
 RUN set -o errexit -o nounset \
 && LLVM_MAJOR="${LLVM_VERSION%%.*}" \
@@ -227,10 +238,31 @@ RUN set -o errexit -o nounset \
 if [[ "$(basename "${binary}")" != "clang-${LLVM_MAJOR}" ]] && file --brief "${binary}" | grep --quiet '^ELF'; then \
 /opt/stage1/bin/llvm-strip "${binary}"; \
 fi \
-done < <(find "/opt/nkavid/llvm/llvm_${LLVM_VERSION}/bin" -type f -print0)
+done < <(find "${LLVM_PREFIX}/bin" -type f -print0)
+
+RUN LLVM_MAJOR="${LLVM_VERSION%%.*}" \
+&& mkdir -p "$(dirname "${LLVM_PREFIX}/${TOOLCHAIN_JSON}")" \
+&& jq \
+--arg version "${LLVM_VERSION}" \
+--arg major "${LLVM_MAJOR}" \
+--arg triple "${LLVM_TRIPLE}" \
+--arg prefix "${LLVM_PREFIX}" \
+'. + {abi_version: "clang", compiler: "clang", cxx_builtin_include_directories: [\
+"include/\($triple)/c++/v1", \
+"include/c++/v1", \
+"lib/clang/\($major)/include", \
+"sysroot/usr/include"], \
+install_prefix: $prefix, resource_dir: "lib/clang/\($major)", target_system_name: $triple, \
+toolchain_identifier: "llvm_\($version)_\(.target_os)_\(.target_cpu)", version: $version}' \
+"${LLVM_PREFIX}/sysroot/${SYSROOT_JSON}" \
+>"${LLVM_PREFIX}/${TOOLCHAIN_JSON}" \
+&& jq --raw-output '.cxx_builtin_include_directories[], .resource_dir' "${LLVM_PREFIX}/${TOOLCHAIN_JSON}" \
+| xargs -I{} test -d "${LLVM_PREFIX}/{}"
 
 FROM scratch AS export
 
 ARG LLVM_VERSION
 
-COPY --from=llvm "/opt/nkavid/llvm/llvm_${LLVM_VERSION}" "/opt/nkavid/llvm/llvm_${LLVM_VERSION}"
+ENV LLVM_PREFIX="/opt/nkavid/llvm/llvm_${LLVM_VERSION}"
+
+COPY --from=llvm "${LLVM_PREFIX}" "${LLVM_PREFIX}"
